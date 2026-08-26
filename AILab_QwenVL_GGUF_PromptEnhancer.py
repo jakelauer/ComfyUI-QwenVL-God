@@ -93,7 +93,7 @@ class AILab_QwenVL_GGUF_PromptEnhancer:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("ENHANCED_OUTPUT",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
     def __init__(self):
         self.llm = None
@@ -639,5 +639,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AILab_QwenVL_GGUF_PromptEnhancer": "QwenVL-Mod Prompt Enhancer (GGUF)",
+    "AILab_QwenVL_GGUF_PromptEnhancer": "QwenVL-God Prompt Enhancer (GGUF)",
 }

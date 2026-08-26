@@ -1,25 +1,34 @@
-# **QwenVL-Mod for ComfyUI**
+# **QwenVL-God for ComfyUI**
+
+This is a fork of [huchukato/ComfyUI-QwenVL-Mod](https://github.com/huchukato/ComfyUI-QwenVL-Mod), itself a fork of [1038lab/ComfyUI-QwenVL](https://github.com/1038lab/ComfyUI-QwenVL). Node names, categories, and this README use **QwenVL-God**. Upstream changelog and model docs below still apply.
 
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom%20Node-blue?style=for-the-badge&logo=python)](https://github.com/comfyanonymous/ComfyUI)
 [![License](https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red?style=for-the-badge&logo=pytorch)](https://pytorch.org)
-[![CUDA](https://img.shields.io/badge/CUDA-13.0%2B-black?style=for-the-badge&logo=nvidia)](https://developer.nvidia.com/cuda-zone)
-[![Downloads](https://img.shields.io/github/downloads/huchukato/ComfyUI-QwenVL-Mod/total?style=for-the-badge&logo=github)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![Stars](https://img.shields.io/github/stars/huchukato/ComfyUI-QwenVL-Mod?style=for-the-badge&logo=github)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![Issues](https://img.shields.io/github/issues/huchukato/ComfyUI-QwenVL-Mod?style=for-the-badge&logo=github)](https://github.com/huchukato/ComfyUI-QwenVL-Mod/issues)
+[![Stars](https://img.shields.io/github/stars/jakelauer/ComfyUI-QwenVL-Mod?style=for-the-badge&logo=github)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
+[![Issues](https://img.shields.io/github/issues/jakelauer/ComfyUI-QwenVL-Mod?style=for-the-badge&logo=github)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod/issues)
 
-[![LightningAI](https://pl-bolts-doc-images.s3.us-east-2.amazonaws.com/app-2/studio-badge.svg)](https://lightning.ai/huchukato/environments/comfyui-v0-14-2-wan2-2-qwen3-vl-autoprompt)
+The ComfyUI Qwen-VL nodes integrate Qwen-VL vision-language models (including Qwen3-VL), GGUF backends, and text-only Qwen3 support for image understanding, video prompting, and text generation.
 
-[![buy-me-coffees](https://i.imgur.com/3MDbAtw.png)](https://buymeacoffee.com/huchukato)
+## **🔱 Changes since the QwenVL-God fork**
 
-[![Deploy ComfyUI-QwenVL-Mod on RunPod](https://raw.githubusercontent.com/huchukato/ComfyUI-QwenVL-Mod/main/img/bannercu13.png)](https://console.runpod.io/deploy?template=1v8gfux2zd&ref=ioakclrv)
+QwenVL-Mod concatenated `custom_prompt` into the same user message as the preset, so there was no real custom system/user split. This fork fixes that and adds a video-prompt workflow built around **QwenVL-God Finetune**.
 
-The ComfyUI-QwenVL custom node integrates powerful Qwen-VL series of vision-language models (LVLMs) from Alibaba Cloud, including latest Qwen3-VL, plus GGUF backends and text-only Qwen3 support. This advanced node enables seamless multimodal AI capabilities within your ComfyUI workflows, allowing for efficient text generation, image understanding, and video analysis.
+- **Real custom prompts**: preset text is the **system** message; `custom_prompt` is the **user** message. `Custom Only (no preset)` uses an unconstrained system prompt.
+- **QwenVL-God Finetune**: video-oriented runner (model + custom prompt + images). Target templates cover MiniMax H3 I2VA / FL2VA / R2VA, Wan 2.2 I2V / T2V, LTX 2.3 I2V / FL2VA, and Custom Only. Duration and layout are filled with `{token}` replacement.
+- **Chainable options bags** (`QWENVL_OPTIONS`), each exposing settings that are *not* on QwenVL-God Finetune:
+  - **Video Prompt** — family + mode (MiniMax I2VA/FL2VA/R2VA, Wan I2V/T2V, LTX I2V/FL2VA), duration, segment length, `prepend_system_prompt`, `extra_tokens` (applied to that prepend text); outputs `duration_seconds` and `segment_seconds`
+  - **Extra Tokens** — dynamic `{name}` bag: wire `value#`, name it in the matching widget; connect to Video Prompt or Finetune
+  - **Wan 2.2** — `prompt_layout` (timeline vs scene; Wan only)
+  - **Generation** — max tokens, sampling, frame count, seed
+  - **Runtime** — quantization, attention, device, compile, keep-model-loaded, keep-last-prompt, dry-run
+  - **MiniMax Keywords** — per-section LoRA/trigger phrases (weave / append / both) or **override** to replace whole H3 sections
+- **`{duration_seconds}` / `{segment_seconds}`** (and extra dict keys) in `custom_prompt` and system templates
+- **Debug trail** on every Options node and on QwenVL-God Finetune: merge path plus the SYSTEM/USER payload the model would see. Runtime **dry-run** builds that without loading Qwen.
+- **Dynamic image inputs**: connect `image`, then `image2`…`image16` slots appear as you wire them.
 
-<img width="749" height="513" alt="Qwen3-VL-Mod" src="https://github.com/user-attachments/assets/0f10b887-1953-4923-b813-37ccacb8a9aa" />
-
-## **📰 News & Updates**
+## **📰 Upstream news & updates**
 * **2026/08/11**: **v2.5.1** 🚀 **MiniMax-H3 Turbo LoRA + Official Diffusion + Uncensored Text Encoder**. [[Update](update.md#version-251-20260811)]
 > ⚡ **Turbo LoRA**: New 4–8 step workflows (`MiniMaxH3-Turbo-*-Qwen3VL.json`) using `Larryvrh/ComfyUI-MiniMax-H3-Turbo` and `minimax_h3_turbo_v4_step600_ema.safetensors`.
 > 📦 **Models**: T2VA/I2VA/FL2VA use the official `minimax_h3_fl2va_pruned_int8_convrot.safetensors` (Comfy-Org). R2VA keeps the official `ref2va`. Text encoder remains `qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors` (ethanfel) for uncensored prompting.
@@ -181,13 +190,13 @@ The ComfyUI-QwenVL custom node integrates powerful Qwen-VL series of vision-lang
 
 ## **✨ Features**
 
-[![Multimodal](https://img.shields.io/badge/Multimodal-Image%20%7C%20Video%20%7C%20Text-purple?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
+[![Multimodal](https://img.shields.io/badge/Multimodal-Image%20%7C%20Video%20%7C%20Text-purple?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
 [![Models](https://img.shields.io/badge/Models-Qwen3%20%7C%20GGUF-blue?style=flat-square)](https://huggingface.co/Qwen)
-[![Quantization](https://img.shields.io/badge/Quantization-4%20%7C%208%20%7C%2016%20bit-orange?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![Performance](https://img.shields.io/badge/Performance-Flash%20Attention%20%7C%20SDPA-green?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![WAN2.2](https://img.shields.io/badge/WAN%202.2-Video%20Generation-red?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![Caching](https://img.shields.io/badge/Caching-Smart%20%7C%20Persistent-yellow?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
-[![Bypass](https://img.shields.io/badge/Bypass-Prompt%20Persistence-green?style=flat-square)](https://github.com/huchukato/ComfyUI-QwenVL-Mod)
+[![Quantization](https://img.shields.io/badge/Quantization-4%20%7C%208%20%7C%2016%20bit-orange?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
+[![Performance](https://img.shields.io/badge/Performance-Flash%20Attention%20%7C%20SDPA-green?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
+[![WAN2.2](https://img.shields.io/badge/WAN%202.2-Video%20Generation-red?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
+[![Caching](https://img.shields.io/badge/Caching-Smart%20%7C%20Persistent-yellow?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
+[![Bypass](https://img.shields.io/badge/Bypass-Prompt%20Persistence-green?style=flat-square)](https://github.com/jakelauer/ComfyUI-QwenVL-Mod)
 
 * **Standard & Advanced Nodes**: Includes a simple QwenVL node for quick use and a QwenVL (Advanced) node with fine-grained control over generation.  
 * **Prompt Enhancers**: Dedicated text-only prompt enhancers for both HF and GGUF backends.  
@@ -216,7 +225,7 @@ The ComfyUI-QwenVL custom node integrates powerful Qwen-VL series of vision-lang
 1. Clone this repository to your ComfyUI/custom_nodes directory:  
    ```
    cd ComfyUI/custom_nodes  
-   git clone https://github.com/huchukato/ComfyUI-QwenVL-Mod.git
+   git clone https://github.com/jakelauer/ComfyUI-QwenVL-Mod.git
    ```
 2. Install the required dependencies:  
    ```
@@ -249,21 +258,32 @@ See [Flash Attention 2 section](#-flash-attention-2-performance-boost) for detai
 
 ## **🧭 Node Overview**
 
+### **QwenVL-God (video prompting)**
+- **QwenVL-God Finetune**: Runner (model, custom prompt, images, `extra_tokens` for `custom_prompt`). Video target, duration, generation, and runtime settings come from Options nodes.
+- **QwenVL-God Options (Video Prompt)**: Family + mode (mode list follows the family; incompatible modes snap to the closest analog), duration, segment length, `prepend_system_prompt`, `extra_tokens` (applied to prepend on this node). Outputs options, debug, `duration_seconds`, `segment_seconds`.
+- **QwenVL-God Extra Tokens**: Wire `value#`; a one-line widget labeled `value#` is the token name. Connect `extra_tokens` to Video Prompt or Finetune. Chain nodes via the extra_tokens input.
+- **QwenVL-God Options (Wan 2.2)**: `prompt_layout` — timeline (`At X seconds`) vs scene (paragraphs). Ignored by MiniMax/LTX except as `{layout}`.
+- **QwenVL-God Options (Generation)**: `max_tokens`, temperature, top_p, beams, repetition penalty, frame count, seed.
+- **QwenVL-God Options (Runtime)**: Quantization, attention, device, torch compile, keep-model-loaded, keep-last-prompt, dry-run.
+- **QwenVL-God Options (MiniMax Keywords)**: Per-section LoRA/trigger phrases or full section overrides.
+
+Chain Options nodes into QwenVL-God Finetune’s `options` input. Unset fields (`inherit`, empty, `-1`) pass through. Connect `debug` to a Show Text node.
+
 ### **Transformers (HF) Nodes**
-- **QwenVL**: Quick vision-language inference (image/video + preset/custom prompts).  
-- **QwenVL (Advanced)**: Full control over sampling, device, and performance settings.  
-- **QwenVL Prompt Enhancer**: Text-only prompt enhancement (supports both Qwen3 text models and QwenVL models in text mode).  
+- **QwenVL-God**: Quick vision-language inference (image/video + preset/custom prompts).  
+- **QwenVL-God (Advanced)**: Full control over sampling, device, and performance settings.  
+- **QwenVL-God Prompt Enhancer**: Text-only prompt enhancement (supports both Qwen3 text models and QwenVL models in text mode).  
 
 ### **GGUF (llama.cpp) Nodes**
-- **QwenVL (GGUF)**: GGUF vision-language inference.  
-- **QwenVL (GGUF Advanced)**: Extended GGUF controls (context, GPU layers, etc.).  
-- **QwenVL Prompt Enhancer (GGUF)**: GGUF text-only prompt enhancement.  
+- **QwenVL-God (GGUF)**: GGUF vision-language inference.  
+- **QwenVL-God Advanced (GGUF)**: Extended GGUF controls (context, GPU layers, etc.).  
+- **QwenVL-God Prompt Enhancer (GGUF)**: GGUF text-only prompt enhancement.  
 
 ## **🧩 GGUF Nodes (llama.cpp backend)**
 
 This repo includes **GGUF** nodes powered by `llama-cpp-python` (separate from the Transformers-based nodes).
 
-- **Nodes**: `QwenVL (GGUF)`, `QwenVL (GGUF Advanced)`, `QwenVL Prompt Enhancer (GGUF)`
+- **Nodes**: `QwenVL-God (GGUF)`, `QwenVL-God Advanced (GGUF)`, `QwenVL-God Prompt Enhancer (GGUF)`
 - **Model folder** (default): `ComfyUI/models/llm/GGUF/` (configurable via `gguf_models.json`)
 - **Vision requirement**: install a vision-capable `llama-cpp-python` wheel that provides `Qwen3VLChatHandler` / `Qwen25VLChatHandler`  
   See [docs/LLAMA_CPP_PYTHON_VISION_INSTALL.md](docs/LLAMA_CPP_PYTHON_VISION_INSTALL.md)
@@ -320,15 +340,17 @@ The models will be automatically downloaded on first use. If you prefer to downl
 
 ### **Basic Usage**
 
-1. Add the **"QwenVL"** node from the 🧪AILab/QwenVL category.  
+1. Add the **"QwenVL-God"** node from the QwenVL-God category.  
 2. Select the **model\_name** you wish to use.  
 3. Connect an image or video (image sequence) source to the node.  
 4. Write your prompt using the preset or custom field.  
 5. Run the workflow.
 
+For MiniMax / Wan / LTX video prompting, use **"QwenVL-God Finetune"** with Video Prompt / Wan 2.2 / Generation / Runtime / MiniMax Keywords options instead.
+
 ### **Advanced Usage**
 
-For more control, use the **"QwenVL (Advanced)"** node. This gives you access to detailed generation parameters like temperature, top\_p, beam search, and device selection.
+For more control, use the **"QwenVL-God (Advanced)"** node. This gives you access to detailed generation parameters like temperature, top\_p, beam search, and device selection.
 
 ## **⚙️ Parameters**
 
@@ -552,15 +574,13 @@ A woman in a red dress walks slowly through a sunlit garden, her hands gently br
 * **Qwen Team**: [Alibaba Cloud](https://github.com/QwenLM) - For development and open-source powerful Qwen-VL models.  
 * **ComfyUI**: [comfyanonymous](https://github.com/comfyanonymous/ComfyUI) - For incredible and extensible ComfyUI platform.  
 * **llama-cpp-python**: [JamePeng/llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) - GGUF backend with vision support used by GGUF nodes.  
-* **GenorTG**: [GenorTG/ComfyUI-Genor-QwenVL-Mod](https://github.com/GenorTG/ComfyUI-Genor-QwenVL-Mod) - For innovative memory management improvements including `unload_after_run` parameter and prompt cache optimizations that prevent OOM errors in multi-node workflows.  
-* **ComfyUI Integration**: [1038lab](https://github.com/1038lab) - Developer of this custom node.
+* **1038lab**: [ComfyUI-QwenVL](https://github.com/1038lab/ComfyUI-QwenVL) - Original custom node.  
+* **huchukato**: [ComfyUI-QwenVL-Mod](https://github.com/huchukato/ComfyUI-QwenVL-Mod) - Upstream fork this project is based on.  
+* **GenorTG**: [GenorTG/ComfyUI-Genor-QwenVL-Mod](https://github.com/GenorTG/ComfyUI-Genor-QwenVL-Mod) - Memory management improvements including `unload_after_run` and prompt cache optimizations.
 
 ## **👥 Author**
 
-- **huchukato**
-  - 🐙 [GitHub](https://github.com/huchukato)
-  - 🐦 [X (Twitter)](https://twitter.com/huchukato)
-  - 🎨 [Civitai](https://civitai.com/user/huchukato) - Check out my AI art models!
+This fork: [jakelauer](https://github.com/jakelauer). Upstream QwenVL-Mod: [huchukato](https://github.com/huchukato).
 
 ## **📜 License**
 

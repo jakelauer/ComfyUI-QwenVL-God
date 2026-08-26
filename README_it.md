@@ -1,4 +1,6 @@
-# **QwenVL-Mod per ComfyUI**
+# **QwenVL-God per ComfyUI**
+
+Questo è un fork di [huchukato/ComfyUI-QwenVL-Mod](https://github.com/huchukato/ComfyUI-QwenVL-Mod). I nomi dei nodi e la categoria sono **QwenVL-God**. Per le modifiche di questo fork vedi il [README in inglese](README.md).
 
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-Custom%20Node-blue?style=for-the-badge&logo=python)](https://github.com/comfyanonymous/ComfyUI)
 [![License](https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge)](LICENSE)

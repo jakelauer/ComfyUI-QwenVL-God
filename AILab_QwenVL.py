@@ -207,6 +207,9 @@ def get_image_hash(image):
     """Generate hash for image tensor"""
     if image is None:
         return None
+    if isinstance(image, (list, tuple)):
+        parts = [get_image_hash(item) or "" for item in image]
+        return hashlib.md5("|".join(parts).encode()).hexdigest()[:16]
     try:
         # Use image tensor properties for hash
         shape = str(image.shape)
@@ -226,6 +229,47 @@ def get_video_hash(video):
     """Generate hash for video tensor (same as image)"""
     return get_image_hash(video)
 
+MAX_IMAGE_SLOTS = 16
+
+
+def extra_image_input_types(start=3, end=MAX_IMAGE_SLOTS):
+    return {f"image{i}": ("IMAGE",) for i in range(start, end + 1)}
+
+
+def flatten_image_batches(batches):
+    """Turn IMAGE tensors (3D or 4D) into one batch, or a list if sizes differ."""
+    frames = []
+    for batch in batches:
+        if batch is None or not hasattr(batch, "dim"):
+            continue
+        if batch.dim() == 3:
+            frames.append(batch)
+        elif batch.dim() == 4:
+            frames.extend(batch[i] for i in range(batch.shape[0]))
+    if not frames:
+        return None
+    try:
+        return torch.stack(frames, dim=0)
+    except Exception:
+        return frames
+
+
+def collect_connected_images(image=None, image2=None, **kwargs):
+    """Keep `image` as the primary still; fold image2 plus image3+ into extras."""
+    numbered = []
+    for key, value in kwargs.items():
+        if not key.startswith("image") or key in {"image", "image2"} or value is None:
+            continue
+        suffix = key[5:]
+        if suffix.isdigit():
+            numbered.append((int(suffix), value))
+    numbered.sort()
+    extras = []
+    if image2 is not None:
+        extras.append(image2)
+    extras.extend(value for _, value in numbered)
+    return image, flatten_image_batches(extras)
+
 # Load cache on module import
 load_prompt_cache()
 try:
@@ -233,8 +277,35 @@ try:
 except ImportError:
     from transformers import AutoModelForImageTextToText as AutoModelForVision2Seq
 
+CUSTOM_ONLY_PRESET = "✍️ Custom Only (no preset)"
+UNCONSTRAINED_SYSTEM_PROMPT = (
+    "Follow the user's request exactly. Do not add extra task constraints, "
+    "required output formats, style rules, or censorship beyond what the user asked. "
+    "Use any provided images only as the user directs."
+)
+DEFAULT_USER_PROMPT = "Follow the system instructions for the provided image(s)."
+
+def with_custom_only_preset(prompts: list[str] | None) -> list[str]:
+    """Put Custom Only first so VL nodes can skip built-in templates."""
+    items = list(prompts or [])
+    if CUSTOM_ONLY_PRESET in items:
+        items = [p for p in items if p != CUSTOM_ONLY_PRESET]
+    return [CUSTOM_ONLY_PRESET, *items]
+
+
+def resolve_vl_messages(preset_prompt: str, custom_prompt: str, system_prompts: dict | None = None) -> tuple[str, str]:
+    """Split VL inputs into a system message (preset) and a user message (custom prompt)."""
+    custom = (custom_prompt or "").strip()
+    if preset_prompt == CUSTOM_ONLY_PRESET:
+        if not custom:
+            raise ValueError("custom_prompt is required when using Custom Only (no preset).")
+        return UNCONSTRAINED_SYSTEM_PROMPT, custom
+    templates = SYSTEM_PROMPTS if system_prompts is None else system_prompts
+    system_prompt = (templates.get(preset_prompt, preset_prompt) or "").strip()
+    return system_prompt, custom or DEFAULT_USER_PROMPT
+
 # Export memory functions for external use
-__all__ = ['PROMPT_CACHE', 'get_cache_key', 'get_alternative_cache_key', 'save_prompt_cache', 'get_image_hash', 'get_video_hash', 'check_pytorch_memory', 'set_pytorch_memory_fraction', 'get_device_info', 'tensor_to_pil', 'get_video_hash', 'enforce_memory', 'quantization_config', 'ensure_model', 'resolve_attention_mode', 'flash_attn_available', 'normalize_device_choice', 'load_model_configs', 'HF_VL_MODELS', 'HF_TEXT_MODELS', 'HF_ALL_MODELS', 'SYSTEM_PROMPTS', 'PRESET_PROMPTS', 'TOOLTIPS', 'Quantization', 'ATTENTION_MODES', 'NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+__all__ = ['PROMPT_CACHE', 'get_cache_key', 'get_alternative_cache_key', 'save_prompt_cache', 'get_image_hash', 'get_video_hash', 'check_pytorch_memory', 'set_pytorch_memory_fraction', 'get_device_info', 'tensor_to_pil', 'get_video_hash', 'enforce_memory', 'quantization_config', 'ensure_model', 'resolve_attention_mode', 'flash_attn_available', 'normalize_device_choice', 'load_model_configs', 'HF_VL_MODELS', 'HF_TEXT_MODELS', 'HF_ALL_MODELS', 'SYSTEM_PROMPTS', 'PRESET_PROMPTS', 'CUSTOM_ONLY_PRESET', 'UNCONSTRAINED_SYSTEM_PROMPT', 'DEFAULT_USER_PROMPT', 'with_custom_only_preset', 'resolve_vl_messages', 'collect_connected_images', 'extra_image_input_types', 'MAX_IMAGE_SLOTS', 'TOOLTIPS', 'Quantization', 'ATTENTION_MODES', 'NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
 
 import folder_paths
 
@@ -251,8 +322,8 @@ TOOLTIPS = {
     "model_name": "Pick the Qwen-VL checkpoint. First run downloads weights into models/LLM/Qwen-VL, so leave disk space.",
     "quantization": "Precision vs VRAM. FP16 gives the best quality if memory allows; 8-bit suits 8–16 GB GPUs; 4-bit fits 6 GB or lower but is slower.",
     "attention_mode": "auto tries SageAttention → FlashAttention 2 → SDPA in order. SDPA is stable and recommended. Only override when debugging attention backends.",
-    "preset_prompt": "Built-in instruction describing how Qwen-VL should analyze the media input.",
-    "custom_prompt": "Additional user input that gets combined with the preset template. Leave empty to use only the template.",
+    "preset_prompt": "System instruction for how Qwen-VL should analyze the media. Custom Only uses a constraint-free system prompt so custom_prompt is the actual task.",
+    "custom_prompt": "User message sent with the image(s). Leave empty to use the preset system instruction alone. Required when Custom Only is selected.",
     "max_tokens": "Maximum number of new tokens to decode. Larger values yield longer answers but consume more time and memory.",
     "keep_model_loaded": "Keeps the model resident in VRAM/RAM after the run so the next prompt skips loading.",
     "seed": "Seed controlling sampling and frame picking; reuse it to reproduce results.",
@@ -546,6 +617,68 @@ def normalize_device_choice(device: str) -> str:
 
     return device
 
+
+def is_mps_device(device) -> bool:
+    if device is None:
+        return False
+    kind = getattr(device, "type", None)
+    if kind:
+        return kind == "mps"
+    return str(device).startswith("mps")
+
+
+def is_invalid_probability_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "probability tensor" in msg or "element < 0" in msg or (
+        "inf" in msg and "nan" in msg
+    )
+
+
+_FINITE_LOGITS_PROCESSORS = None
+
+
+def finite_logits_processors():
+    """Upcast and replace inf/nan logits so multinomial sampling stays valid (especially on MPS)."""
+    global _FINITE_LOGITS_PROCESSORS
+    if _FINITE_LOGITS_PROCESSORS is None:
+        from transformers import LogitsProcessor, LogitsProcessorList
+
+        class FiniteLogitsProcessor(LogitsProcessor):
+            def __call__(self, input_ids, scores):
+                if scores is None:
+                    return scores
+                cleaned = scores.float() if scores.dtype != torch.float32 else scores
+                return torch.nan_to_num(cleaned, nan=0.0, posinf=1e4, neginf=-1e4)
+
+        _FINITE_LOGITS_PROCESSORS = LogitsProcessorList([FiniteLogitsProcessor()])
+    return _FINITE_LOGITS_PROCESSORS
+
+
+def generate_with_sampling_fallback(model, model_inputs, kwargs):
+    try:
+        return model.generate(**model_inputs, **kwargs)
+    except Exception as exc:
+        if not kwargs.get("do_sample") or not is_invalid_probability_error(exc):
+            raise
+        print(
+            "[QwenVL] Sampling produced invalid probabilities "
+            f"({type(exc).__name__}: {exc}). Retrying with greedy decoding."
+        )
+        retry = dict(kwargs)
+        retry["do_sample"] = False
+        for key in ("temperature", "top_p", "top_k"):
+            retry.pop(key, None)
+        try:
+            return model.generate(**model_inputs, **retry)
+        except Exception as retry_exc:
+            if is_invalid_probability_error(retry_exc):
+                raise RuntimeError(
+                    "Generation produced invalid probabilities (common with FP16 sampling on MPS). "
+                    "Try Runtime device=cpu, or a smaller/quantized model."
+                ) from retry_exc
+            raise
+
+
 def flash_attn_available():
     if not torch.cuda.is_available():
         return False
@@ -794,6 +927,11 @@ class QwenVLBase:
                 torch.cuda.ipc_collect()
             except Exception:
                 pass
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            try:
+                torch.mps.empty_cache()
+            except Exception:
+                pass
 
     def load_model(
         self,
@@ -872,8 +1010,8 @@ class QwenVLBase:
         # directly onto a GPU through device_map. FP16/FP32 paths can keep the
         # old "load on CPU, move to device" behavior, which is friendlier to
         # tight VRAM during the initial weight materialization.
-        if quant_config is not None and device == "cpu":
-            print("[QwenVL] ⚠️  BitsAndBytes requires a CUDA/ROCm GPU — falling back to FP16/FP32 on CPU")
+        if quant_config is not None and not str(device).startswith("cuda"):
+            print("[QwenVL] ⚠️  BitsAndBytes requires CUDA — falling back to FP16 on this device")
             quant_config = None
             quant = Quantization.FP16
 
@@ -891,23 +1029,33 @@ class QwenVLBase:
             self.model = AutoModelForVision2Seq.from_pretrained(model_path, **load_kwargs).eval()
             print(f"[QwenVL] ✅ BitsAndBytes model loaded ({quant.value})")
         else:
+            load_dtype = torch.float16 if device != "cpu" else torch.float32
             load_kwargs = {
-                "device_map": "cpu",  # Materialize on CPU first to limit VRAM spikes
-                "dtype": torch.float16,
+                "dtype": load_dtype,
                 "attn_implementation": actual_attn_impl,
                 "use_safetensors": True,
                 "low_cpu_mem_usage": True,
             }
+            # CUDA: materialize on CPU first to limit VRAM spikes, then move.
+            # MPS: skip device_map so .to("mps") actually relocates weights.
+            if str(device).startswith("cuda"):
+                load_kwargs["device_map"] = "cpu"
             self.model = AutoModelForVision2Seq.from_pretrained(model_path, **load_kwargs).eval()
 
-            if device != "cpu" and torch.cuda.is_available():
-                print(f"[QwenVL] 🔄 Moving model from CPU to {device}...")
+            if device != "cpu":
+                print(f"[QwenVL] 🔄 Moving model to {device}...")
                 try:
                     self.model = self.model.to(device)
                     print(f"[QwenVL] ✅ Model moved to {device}")
                 except Exception as e:
-                    print(f"[QwenVL] ❌ Failed to move to GPU: {e}")
+                    print(f"[QwenVL] ❌ Failed to move to {device}: {e}")
                     print("[QwenVL] Keeping model on CPU (will be very slow)")
+
+        try:
+            param_device = next(self.model.parameters()).device
+            print(f"[QwenVL] Model parameter device: {param_device}")
+        except StopIteration:
+            pass
         
         # Apply SageAttention patching if needed
         if attn_impl == "sage":
@@ -976,15 +1124,16 @@ class QwenVLBase:
         num_beams,
         repetition_penalty,
         model_name="",
+        system_prompt="",
     ):
         # Memory optimization: clear cache before generation
         ensure_cuda_vram_headroom("QwenVL", min_free_gb=1.0, min_free_ratio=0.08)
 
-        conversation = [{"role": "user", "content": []}]
+        user_content = []
         if image is not None:
             if image.dim() == 4 and image.shape[0] > 1:
                 print(f"[QwenVL] IMAGE input contains {image.shape[0]} items; using the first item only. Use the image2 input for multi-image analysis.")
-            conversation[0]["content"].append({"type": "image", "image": self.tensor_to_pil(image)})
+            user_content.append({"type": "image", "image": self.tensor_to_pil(image)})
         if image2 is not None:
             frames = [self.tensor_to_pil(frame) for frame in image2]
             if len(frames) > frame_count:
@@ -996,8 +1145,13 @@ class QwenVLBase:
                 # (e.g. first+last frame for FL2VA, or multiple references for R2VA)
                 # instead of treating them as a single video sequence.
                 for frame in frames:
-                    conversation[0]["content"].append({"type": "image", "image": frame})
-        conversation[0]["content"].append({"type": "text", "text": ("/no_think\n" if getattr(self, "is_qwen35", False) else "") + prompt_text})
+                    user_content.append({"type": "image", "image": frame})
+        user_content.append({"type": "text", "text": ("/no_think\n" if getattr(self, "is_qwen35", False) else "") + prompt_text})
+
+        conversation = []
+        if system_prompt and str(system_prompt).strip():
+            conversation.append({"role": "system", "content": str(system_prompt).strip()})
+        conversation.append({"role": "user", "content": user_content})
         
         # --- Qwen3.5 Heretic Logic: Template ---
         is_qwen35 = getattr(self, "is_qwen35", False)
@@ -1006,16 +1160,30 @@ class QwenVLBase:
             chat_kwargs["enable_thinking"] = False
 
         # Optimize chat template for memory efficiency
-        chat = self.processor.apply_chat_template(
-            conversation,
-            tokenize=False,
-            add_generation_prompt=True,
-            **chat_kwargs
-        )
+        try:
+            chat = self.processor.apply_chat_template(
+                conversation,
+                tokenize=False,
+                add_generation_prompt=True,
+                **chat_kwargs
+            )
+        except Exception as exc:
+            # Some VL chat templates reject a plain-string system message.
+            if conversation and conversation[0].get("role") == "system":
+                print(f"[QwenVL] Chat template rejected system string ({exc}); retrying with text content parts.")
+                conversation[0]["content"] = [{"type": "text", "text": conversation[0]["content"]}]
+                chat = self.processor.apply_chat_template(
+                    conversation,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **chat_kwargs
+                )
+            else:
+                raise
         
         # Process images more efficiently
         # All frames (image + video inputs) are now passed as individual images
-        images = [item["image"] for item in conversation[0]["content"] if item["type"] == "image"]
+        images = [item["image"] for item in user_content if item["type"] == "image"]
         videos = None  # no longer used — all frames are images
 
         # Use smaller batch size for memory efficiency
@@ -1038,41 +1206,47 @@ class QwenVLBase:
             "num_beams": num_beams,
             "eos_token_id": stop_tokens,
             "pad_token_id": self.tokenizer.pad_token_id,
+            "logits_processor": finite_logits_processors(),
         }
         if num_beams == 1:
-            kwargs.update({"do_sample": True, "temperature": temperature, "top_p": top_p})
-            # --- Qwen3.5 Heretic Logic: Top K ---
-            if is_qwen35:
-                kwargs["top_k"] = 20
-                print("[QwenVL] Qwen3.5 detected: Forcing top_k=20 for recommended tuning.")
+            temp = float(temperature) if temperature is not None else 0.6
+            if temp <= 0:
+                kwargs["do_sample"] = False
+            else:
+                kwargs.update({
+                    "do_sample": True,
+                    "temperature": max(temp, 0.01),
+                    "top_p": top_p,
+                })
+                # top_k=20 + top_p on FP16 MPS often zeros the distribution.
+                if is_qwen35 and not is_mps_device(model_device):
+                    kwargs["top_k"] = 20
+                    print("[QwenVL] Qwen3.5 detected: Forcing top_k=20 for recommended tuning.")
+                elif is_qwen35:
+                    print("[QwenVL] Qwen3.5 on MPS: skipping top_k to keep sampling numerically stable.")
         else:
             kwargs["do_sample"] = False
-            
-        # Generate with memory monitoring
+
         try:
-            outputs = self.model.generate(**model_inputs, **kwargs)
-        except torch.cuda.OutOfMemoryError as e:
-            # Clear memory and retry with reduced parameters
-            print(f"[QwenVL] OOM detected, clearing memory and retrying...")
+            outputs = generate_with_sampling_fallback(self.model, model_inputs, kwargs)
+        except torch.cuda.OutOfMemoryError:
+            print("[QwenVL] OOM detected, clearing memory and retrying...")
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            
-            # Retry with smaller max_tokens
+
             reduced_tokens = max(256, max_tokens // 2)
             kwargs["max_new_tokens"] = reduced_tokens
             print(f"[QwenVL] Retrying with reduced tokens: {reduced_tokens}")
-            
+
             try:
-                outputs = self.model.generate(**model_inputs, **kwargs)
+                outputs = generate_with_sampling_fallback(self.model, model_inputs, kwargs)
             except torch.cuda.OutOfMemoryError:
                 print(f"[QwenVL] OOM still occurs with {reduced_tokens} tokens, falling back to CPU")
-                # Fallback to CPU if GPU still OOM
-                device_backup = model_inputs["input_ids"].device
                 for key in model_inputs:
                     if torch.is_tensor(model_inputs[key]):
                         model_inputs[key] = model_inputs[key].cpu()
-                outputs = self.model.generate(**model_inputs, **kwargs)
+                outputs = generate_with_sampling_fallback(self.model, model_inputs, kwargs)
         
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -1080,7 +1254,7 @@ class QwenVLBase:
         text = self.tokenizer.decode(outputs[0, input_len:], skip_special_tokens=True)
         return text.strip()
 
-    def run(self, model_name, quantization, preset_prompt, custom_prompt, image, image2, frame_count, max_tokens, temperature, top_p, num_beams, repetition_penalty, seed, keep_model_loaded, attention_mode, use_torch_compile, device, keep_last_prompt=False):
+    def run(self, model_name, quantization, preset_prompt, custom_prompt, image, image2, frame_count, max_tokens, temperature, top_p, num_beams, repetition_penalty, seed, keep_model_loaded, attention_mode, use_torch_compile, device, keep_last_prompt=False, system_override=None, user_override=None, cache_preset=None):
         torch.manual_seed(seed)
         
         global LAST_SAVED_PROMPT
@@ -1098,12 +1272,18 @@ class QwenVLBase:
         # Always generate when keep last prompt is disabled
         print(f"[QwenVL] Keep last prompt disabled - generating new prompt")
         
-        prompt_template = SYSTEM_PROMPTS.get(preset_prompt, preset_prompt)
+        if system_override is not None:
+            system_prompt = str(system_override).strip()
+            user_prompt = (user_override or "").strip() or DEFAULT_USER_PROMPT
+        else:
+            system_prompt, user_prompt = resolve_vl_messages(preset_prompt, custom_prompt)
+        print(f"[QwenVL] System prompt: {system_prompt[:80]}...")
+        print(f"[QwenVL] User prompt: {user_prompt[:80]}...")
         
         # Generate cache key with all inputs including seed
         image_hash = get_image_hash(image)
         video_hash = get_video_hash(image2)
-        cache_key = get_cache_key(model_name, preset_prompt, custom_prompt, image_hash, video_hash, seed)
+        cache_key = get_cache_key(model_name, cache_preset or preset_prompt, custom_prompt, image_hash, video_hash, seed)
         
         # Check cache first (only for random mode)
         if cache_key in PROMPT_CACHE:
@@ -1111,12 +1291,6 @@ class QwenVLBase:
             if cached_text:
                 print(f"[QwenVL] Using cached prompt for seed {seed}: {cache_key[:8]}...")
                 return (cached_text,)
-        
-        if custom_prompt and custom_prompt.strip():
-            # Combine user input with template - custom prompt first for priority
-            prompt = f"{custom_prompt.strip()}\n\n{prompt_template}"
-        else:
-            prompt = prompt_template
             
         self.load_model(
             model_name,
@@ -1128,7 +1302,7 @@ class QwenVLBase:
         )
         try:
             text = self.generate(
-                prompt,
+                user_prompt,
                 image,
                 image2,
                 frame_count,
@@ -1138,6 +1312,7 @@ class QwenVLBase:
                 num_beams,
                 repetition_penalty,
                 model_name=model_name,
+                system_prompt=system_prompt,
             )
             
             # Cache the generated text
@@ -1168,7 +1343,7 @@ class AILab_QwenVL(QwenVLBase):
     def INPUT_TYPES(cls):
         models = list(HF_VL_MODELS.keys())
         default_model = models[0] if models else "Qwen3-VL-4B-Instruct"
-        prompts = PRESET_PROMPTS or ["Describe this image in detail."]
+        prompts = with_custom_only_preset(PRESET_PROMPTS or ["Describe this image in detail."])
         preferred_prompt = "🖼️ Detailed Description"
         default_prompt = preferred_prompt if preferred_prompt in prompts else prompts[0]
         return {
@@ -1186,15 +1361,17 @@ class AILab_QwenVL(QwenVLBase):
             "optional": {
                 "image": ("IMAGE",),
                 "image2": ("IMAGE",),
+                **extra_image_input_types(),
             },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("RESPONSE",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
-    def process(self, model_name, quantization, preset_prompt, custom_prompt, attention_mode, max_tokens, keep_model_loaded, seed, keep_last_prompt=False, image=None, image2=None):
+    def process(self, model_name, quantization, preset_prompt, custom_prompt, attention_mode, max_tokens, keep_model_loaded, seed, keep_last_prompt=False, image=None, image2=None, **kwargs):
+        image, image2 = collect_connected_images(image, image2, **kwargs)
         return self.run(model_name, quantization, preset_prompt, custom_prompt, image, image2, 16, max_tokens, 0.6, 0.9, 1, 1.2, seed, keep_model_loaded, attention_mode, False, "auto", keep_last_prompt)
 
 class AILab_QwenVL_Advanced(QwenVLBase):
@@ -1202,7 +1379,7 @@ class AILab_QwenVL_Advanced(QwenVLBase):
     def INPUT_TYPES(cls):
         models = list(HF_VL_MODELS.keys())
         default_model = models[0] if models else "Qwen3-VL-4B-Instruct"
-        prompts = PRESET_PROMPTS or ["Describe this image in detail."]
+        prompts = with_custom_only_preset(PRESET_PROMPTS or ["Describe this image in detail."])
         preferred_prompt = "🖼️ Detailed Description"
         default_prompt = preferred_prompt if preferred_prompt in prompts else prompts[0]
 
@@ -1232,15 +1409,17 @@ class AILab_QwenVL_Advanced(QwenVLBase):
             "optional": {
                 "image": ("IMAGE",),
                 "image2": ("IMAGE",),
+                **extra_image_input_types(),
             },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("RESPONSE",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
-    def process(self, model_name, quantization, attention_mode, use_torch_compile, device, preset_prompt, custom_prompt, max_tokens, temperature, top_p, num_beams, repetition_penalty, frame_count, keep_model_loaded, seed, keep_last_prompt, image=None, image2=None):
+    def process(self, model_name, quantization, attention_mode, use_torch_compile, device, preset_prompt, custom_prompt, max_tokens, temperature, top_p, num_beams, repetition_penalty, frame_count, keep_model_loaded, seed, keep_last_prompt, image=None, image2=None, **kwargs):
+        image, image2 = collect_connected_images(image, image2, **kwargs)
         return self.run(model_name, quantization, preset_prompt, custom_prompt, image, image2, frame_count, max_tokens, temperature, top_p, num_beams, repetition_penalty, seed, keep_model_loaded, attention_mode, use_torch_compile, device, keep_last_prompt)
 
 NODE_CLASS_MAPPINGS = {
@@ -1249,6 +1428,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AILab_QwenVL": "QwenVL-Mod",
-    "AILab_QwenVL_Advanced": "QwenVL-Mod (Advanced)",
+    "AILab_QwenVL": "QwenVL-God",
+    "AILab_QwenVL_Advanced": "QwenVL-God (Advanced)",
 }

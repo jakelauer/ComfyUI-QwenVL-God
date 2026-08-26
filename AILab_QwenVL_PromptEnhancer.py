@@ -18,10 +18,13 @@ from AILab_OutputCleaner import OutputCleanConfig, clean_model_output, prompt_ou
 
 from AILab_QwenVL import (
     ATTENTION_MODES,
+    CUSTOM_ONLY_PRESET,
     HF_TEXT_MODELS,
     HF_VL_MODELS,
     PROMPT_CACHE,
     ensure_cuda_vram_headroom,
+    finite_logits_processors,
+    generate_with_sampling_fallback,
     get_cache_key,
     get_alternative_cache_key,
     save_prompt_cache,
@@ -78,7 +81,7 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("ENHANCED_OUTPUT",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
     def __init__(self):
         super().__init__()
@@ -211,7 +214,7 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
         output = self.run(
             model_name=model_name,
             quantization=quantization,
-            preset_prompt="🪄 Prompt Refine & Expand",
+            preset_prompt=CUSTOM_ONLY_PRESET,
             custom_prompt=prompt,
             image=None,
             image2=None,
@@ -252,9 +255,9 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
         else:
             quant_cfg = None
 
-        # BnB needs a GPU and cannot tolerate a post-load .to(device).
-        if quant_cfg is not None and device == "cpu":
-            print("[QwenVL] ⚠️  BitsAndBytes requires a CUDA/ROCm GPU — falling back to FP32 on CPU")
+        # BnB needs CUDA and cannot tolerate a post-load .to(device).
+        if quant_cfg is not None and not str(device).startswith("cuda"):
+            print("[QwenVL] ⚠️  BitsAndBytes requires CUDA — falling back to FP16 on this device")
             quant_cfg = None
 
         signature = (repo_id, quantization, device)
@@ -272,7 +275,7 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
             # accelerate must dispatch BnB weights straight to the target GPU.
             load_kwargs["device_map"] = device if device.startswith("cuda") else "auto"
         else:
-            load_kwargs["dtype"] = torch.float16 if device == "cuda" else torch.float32
+            load_kwargs["dtype"] = torch.float16 if device != "cpu" else torch.float32
 
         print(f"[QwenVL] Loading text model {model_name} ({quantization})")
         self.text_tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
@@ -341,10 +344,11 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
             "max_new_tokens": max_tokens,
             "repetition_penalty": repetition_penalty,
             "do_sample": True,
-            "temperature": temperature,
+            "temperature": max(float(temperature), 0.01),
             "top_p": top_p,
             "eos_token_id": self.text_tokenizer.eos_token_id,
             "pad_token_id": self.text_tokenizer.eos_token_id,
+            "logits_processor": finite_logits_processors(),
         }
 
         # Optional: Apply seed for generation reproducibility
@@ -353,7 +357,7 @@ class AILab_QwenVL_PromptEnhancer(QwenVLBase):
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
 
-        outputs = self.text_model.generate(**inputs, **kwargs)
+        outputs = generate_with_sampling_fallback(self.text_model, inputs, kwargs)
 
         # Strip out the input tokens to get just the generated response
         input_length = inputs["input_ids"].shape[1]
@@ -389,5 +393,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AILab_QwenVL_PromptEnhancer": "QwenVL-Mod Prompt Enhancer",
+    "AILab_QwenVL_PromptEnhancer": "QwenVL-God Prompt Enhancer",
 }

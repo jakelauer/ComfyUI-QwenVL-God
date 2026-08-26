@@ -11,6 +11,13 @@ const NODE_COLORS = {
     // QwenVL nodes
     "AILab_QwenVL": "QwenVL",
     "AILab_QwenVL_Advanced": "QwenVL",
+    "AILab_QwenVL_Finetune": "QwenVL",
+    "AILab_QwenVL_Prompt_Options": "Tools",
+    "AILab_QwenVL_Generation_Options": "Tools",
+    "AILab_QwenVL_Wan_Options": "Tools",
+    "AILab_QwenVL_Runtime_Options": "Tools",
+    "AILab_QwenVL_MiniMax_Keywords": "Tools",
+    "AILab_QwenVL_Extra_Tokens": "Tools",
     "AILab_QwenVL_PromptEnhancer": "Enhancer",
     "AILab_QwenVL_GGUF": "QwenVLGGUF",
     "AILab_QwenVL_GGUF_Advanced": "QwenVLGGUF",

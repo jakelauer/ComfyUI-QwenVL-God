@@ -1,10 +1,10 @@
 """
 {
-  "name": "QwenVL-Mod: Enhanced Vision-Language",
-  "description": "Enhanced QwenVL node with Flash Attention 2, WAN 2.2 video generation, free abliterated models, and comprehensive NSFW support. Advanced fork with major improvements over original for stable multimodal AI workflows.",
-  "author": "huchukato",
-  "version": "2.0.4",
-  "url": "https://github.com/huchukato/ComfyUI-QwenVL-Mod",
+  "name": "QwenVL-God: Enhanced Vision-Language",
+  "description": "Fork of QwenVL-Mod with real custom prompts, QwenVL-God video prompt nodes, chainable options, MiniMax section overrides, and dynamic image inputs.",
+  "author": "jakelauer",
+  "version": "2.6",
+  "url": "https://github.com/jakelauer/ComfyUI-QwenVL-Mod",
   "category": "image"
 }
 """

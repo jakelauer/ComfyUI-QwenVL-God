@@ -30,7 +30,19 @@ from PIL import Image
 
 # Import cache functions from main module
 sys.path.append(str(Path(__file__).parent))
-from AILab_QwenVL import PROMPT_CACHE, ensure_cuda_vram_headroom, get_cache_key, get_alternative_cache_key, get_image_hash, get_video_hash, save_prompt_cache
+from AILab_QwenVL import (
+    PROMPT_CACHE,
+    collect_connected_images,
+    extra_image_input_types,
+    ensure_cuda_vram_headroom,
+    get_cache_key,
+    get_alternative_cache_key,
+    get_image_hash,
+    get_video_hash,
+    resolve_vl_messages,
+    save_prompt_cache,
+    with_custom_only_preset,
+)
 
 import folder_paths
 from AILab_OutputCleaner import OutputCleanConfig, clean_model_output
@@ -394,6 +406,14 @@ def _tensor_to_base64_png(tensor) -> str | None:
 def _sample_video_frames(video, frame_count: int):
     if video is None:
         return []
+    if isinstance(video, (list, tuple)):
+        frames = list(video)
+        total = len(frames)
+        frame_count = max(int(frame_count), 1)
+        if total <= frame_count:
+            return frames
+        idx = np.linspace(0, total - 1, frame_count, dtype=int)
+        return [frames[int(i)] for i in idx]
     if video.ndim != 4:
         return [video]
     total = int(video.shape[0])
@@ -751,21 +771,18 @@ class QwenVLGGUFBase:
             except Exception as exc:
                 print(f"[QwenVL GGUF DEBUG] llama context reset skipped: {exc}")
 
+        messages = []
+        if system_prompt and str(system_prompt).strip():
+            messages.append({"role": "system", "content": str(system_prompt).strip()})
         if images_b64:
             content = [{"type": "text", "text": user_prompt}]
             for img in images_b64:
                 if not img:
                     continue
                 content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ]
+            messages.append({"role": "user", "content": content})
         else:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
+            messages.append({"role": "user", "content": user_prompt})
 
         start = time.perf_counter()
         extra_kwargs = {}
@@ -842,7 +859,7 @@ class QwenVLGGUFBase:
         # Always generate when keep last prompt is disabled
         print(f"[QwenVL GGUF] Keep last prompt disabled - generating new prompt")
 
-        prompt_template = SYSTEM_PROMPTS.get(preset_prompt, preset_prompt)
+        system_prompt, user_prompt = resolve_vl_messages(preset_prompt, custom_prompt, SYSTEM_PROMPTS)
 
         # Generate cache key with all inputs including seed
         image_hash = get_image_hash(image)
@@ -858,14 +875,8 @@ class QwenVLGGUFBase:
         #         return cached_text.strip()
 
         print(f"[QwenVL GGUF DEBUG] Cache disabled - proceeding with generation")
-
-        if custom_prompt and custom_prompt.strip():
-            # Combine user input with template - custom prompt first for priority
-            prompt = f"{custom_prompt.strip()}\n\n{prompt_template}"
-        else:
-            prompt = prompt_template
-
-        print(f"[QwenVL GGUF DEBUG] Final prompt: {prompt[:100]}...")
+        print(f"[QwenVL GGUF DEBUG] System prompt: {system_prompt[:100]}...")
+        print(f"[QwenVL GGUF DEBUG] User prompt: {user_prompt[:100]}...")
 
         images_b64: list[str] = []
         if image is not None:
@@ -897,7 +908,8 @@ class QwenVLGGUFBase:
 
         # Debug video/image info
         if video is not None:
-            print(f"[QwenVL GGUF DEBUG] Video shape: {video.shape}")
+            shape = getattr(video, "shape", f"list[{len(video)}]")
+            print(f"[QwenVL GGUF DEBUG] Video shape: {shape}")
             print(f"[QwenVL GGUF DEBUG] Frame count requested: {frame_count}")
         if image is not None:
             print(f"[QwenVL GGUF DEBUG] Image shape: {image.shape}")
@@ -925,13 +937,10 @@ class QwenVLGGUFBase:
                 print("[QwenVL] Warning: images provided but this model entry has no mmproj_file; images will be ignored")
             print(f"[QwenVL GGUF DEBUG] Starting generation...")
             # Prepend /no_think for Qwen3.5 models (enable_thinking is deprecated in recent llama.cpp)
-            effective_prompt = ("/no_think\n" + prompt) if getattr(self, "is_qwen35", False) else prompt
+            effective_user = ("/no_think\n" + user_prompt) if getattr(self, "is_qwen35", False) else user_prompt
             text = self._invoke(
-                system_prompt=(
-                    "You are a helpful vision-language assistant. "
-                    "Answer directly with the final answer only. No <think> and no reasoning."
-                ),
-                user_prompt=effective_prompt,
+                system_prompt=system_prompt,
+                user_prompt=effective_user,
                 images_b64=images_b64 if self.chat_handler is not None else [],
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -977,7 +986,7 @@ class AILab_QwenVL_GGUF(QwenVLGGUFBase):
         model_keys = sorted([key for key, entry in all_models.items() if (entry or {}).get("mmproj_filename")]) or ["(no GGUF VL models found)"]
         default_model = model_keys[0]
 
-        prompts = PRESET_PROMPTS or ["🖼️ Detailed Description"]
+        prompts = with_custom_only_preset(PRESET_PROMPTS or ["🖼️ Detailed Description"])
         preferred_prompt = "🖼️ Detailed Description"
         default_prompt = preferred_prompt if preferred_prompt in prompts else prompts[0]
 
@@ -985,7 +994,7 @@ class AILab_QwenVL_GGUF(QwenVLGGUFBase):
             "required": {
                 "model_name": (model_keys, {"default": default_model}),
                 "preset_prompt": (prompts, {"default": default_prompt}),
-                "custom_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Additional user input that gets combined with the preset template. Leave empty to use only the template."}),
+                "custom_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "User message sent with the image(s). Leave empty to use the preset system instruction alone. Required when Custom Only is selected."}),
                 "max_tokens": ("INT", {"default": 8192, "min": 64, "max": 8192}),
                 "keep_model_loaded": ("BOOLEAN", {"default": True}),
                 "seed": ("INT", {"default": 1, "min": 1, "max": 2**32 - 1}),
@@ -994,13 +1003,14 @@ class AILab_QwenVL_GGUF(QwenVLGGUFBase):
             "optional": {
                 "image": ("IMAGE",),
                 "video": ("IMAGE",),
+                **extra_image_input_types(),
             },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("RESPONSE",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
     def process(
         self,
@@ -1013,7 +1023,9 @@ class AILab_QwenVL_GGUF(QwenVLGGUFBase):
         keep_last_prompt,
         image=None,
         video=None,
+        **kwargs,
     ):
+        image, video = collect_connected_images(image, video, **kwargs)
         return self.run(
             model_name=model_name,
             preset_prompt=preset_prompt,
@@ -1045,7 +1057,7 @@ class AILab_QwenVL_GGUF_Advanced(QwenVLGGUFBase):
         model_keys = sorted([key for key, entry in all_models.items() if (entry or {}).get("mmproj_filename")]) or ["(no GGUF VL models found)"]
         default_model = model_keys[0]
 
-        prompts = PRESET_PROMPTS or ["🖼️ Detailed Description"]
+        prompts = with_custom_only_preset(PRESET_PROMPTS or ["🖼️ Detailed Description"])
         preferred_prompt = "🖼️ Detailed Description"
         default_prompt = preferred_prompt if preferred_prompt in prompts else prompts[0]
 
@@ -1058,7 +1070,7 @@ class AILab_QwenVL_GGUF_Advanced(QwenVLGGUFBase):
                 "model_name": (model_keys, {"default": default_model}),
                 "device": (device_options, {"default": "auto"}),
                 "preset_prompt": (prompts, {"default": default_prompt}),
-                "custom_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Additional user input that gets combined with the preset template. Leave empty to use only the template."}),
+                "custom_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "User message sent with the image(s). Leave empty to use the preset system instruction alone. Required when Custom Only is selected."}),
                 "max_tokens": ("INT", {"default": 8192, "min": 64, "max": 8192}),
                 "temperature": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 2.0}),
                 "top_p": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0}),
@@ -1077,13 +1089,14 @@ class AILab_QwenVL_GGUF_Advanced(QwenVLGGUFBase):
             "optional": {
                 "image": ("IMAGE",),
                 "video": ("IMAGE",),
+                **extra_image_input_types(),
             },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("RESPONSE",)
     FUNCTION = "process"
-    CATEGORY = "QwenVL-Mod/QwenVL"
+    CATEGORY = "QwenVL-God"
 
     def process(
         self,
@@ -1107,7 +1120,9 @@ class AILab_QwenVL_GGUF_Advanced(QwenVLGGUFBase):
         keep_last_prompt,
         image=None,
         video=None,
+        **kwargs,
     ):
+        image, video = collect_connected_images(image, video, **kwargs)
         return self.run(
             model_name=model_name,
             preset_prompt=preset_prompt,
@@ -1138,6 +1153,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AILab_QwenVL_GGUF": "QwenVL-Mod (GGUF)",
-    "AILab_QwenVL_GGUF_Advanced": "QwenVL-Mod Advanced (GGUF)",
+    "AILab_QwenVL_GGUF": "QwenVL-God (GGUF)",
+    "AILab_QwenVL_GGUF_Advanced": "QwenVL-God Advanced (GGUF)",
 }
